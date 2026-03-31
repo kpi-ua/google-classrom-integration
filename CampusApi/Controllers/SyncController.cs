@@ -20,8 +20,8 @@ namespace CampusApi.Controllers
         {
             try
             {
-                // googleCourseId - ID курса в гугле (например "s4ce34m")
-                // employeeMonitoringId - ID ведомости в БД кампуса (cMonitoringEmployeeId)
+                // googleCourseId - ID або Base64 посилання курсу
+                // employeeMonitoringId - ID відомості у БД кампуса
                 var result = await _syncService.SyncGradesAsync(googleCourseId, employeeMonitoringId);
                 return Ok(new { message = result });
             }
@@ -29,12 +29,6 @@ namespace CampusApi.Controllers
             {
                 return StatusCode(500, new { error = ex.Message });
             }
-        }
-        [HttpGet("my-courses")]
-        public async Task<IActionResult> GetCourses([FromServices] IGoogleClassroomService googleApi)
-        {
-            var list = await googleApi.GetMyCoursesIdsAsync();
-            return Ok(list);
         }
     }
 }

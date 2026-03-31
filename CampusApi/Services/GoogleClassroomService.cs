@@ -5,88 +5,108 @@ using Google.Apis.Util.Store;
 
 namespace CampusApi.Services
 {
+    // Модель для зберігання конкретної оцінки за конкретне завдання
+    public class StudentGradeItem
+    {
+        public string AssignmentTitle { get; set; }
+        public float Mark { get; set; }
+    }
+
     public interface IGoogleClassroomService
     {
-        Task<Dictionary<string, float>> GetTotalGradesForCourseAsync(string courseId);
-        Task<List<string>> GetMyCoursesIdsAsync();
-
+        Task<Dictionary<string, List<StudentGradeItem>>> GetAllGradesForCourseAsync(string courseId);
     }
 
     public class GoogleClassroomService : IGoogleClassroomService
     {
+        // Необхідні дозволи (Scopes) для читання оцінок та пошт студентів
         private static readonly string[] Scopes = {
-            ClassroomService.Scope.ClassroomCourseworkStudentsReadonly,
-            ClassroomService.Scope.ClassroomRostersReadonly,
-            ClassroomService.Scope.ClassroomCoursesReadonly
-        };
-
-        public async Task<Dictionary<string, float>> GetTotalGradesForCourseAsync(string courseId)
-        {
-            UserCredential credential;
-
-            using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
-            {
-                // ДОБАВИЛ НОВЫЙ SCOPE: ClassroomProfileEmails (чтобы Гугл точно отдал почты)
-                string[] scopes = {
             ClassroomService.Scope.ClassroomCourseworkStudentsReadonly,
             ClassroomService.Scope.ClassroomRostersReadonly,
             ClassroomService.Scope.ClassroomCoursesReadonly,
             ClassroomService.Scope.ClassroomProfileEmails
         };
 
+        // Метод для автоматичного розшифрування Base64 посилань у цифрові ID
+        private string DecodeCourseIdIfNeeded(string courseId)
+        {
+            if (courseId.All(char.IsDigit)) return courseId; // Якщо вже цифри - віддаємо як є
+            try
+            {
+                string base64 = courseId.Replace('-', '+').Replace('_', '/');
+                switch (base64.Length % 4)
+                {
+                    case 2: base64 += "=="; break;
+                    case 3: base64 += "="; break;
+                }
+                byte[] data = Convert.FromBase64String(base64);
+                string decoded = System.Text.Encoding.UTF8.GetString(data);
+                if (decoded.All(char.IsDigit)) return decoded;
+            }
+            catch { }
+            return courseId;
+        }
+
+        public async Task<Dictionary<string, List<StudentGradeItem>>> GetAllGradesForCourseAsync(string courseId)
+        {
+            // Декодуємо ID курсу, якщо передано зашифроване посилання
+            courseId = DecodeCourseIdIfNeeded(courseId);
+
+            UserCredential credential;
+            using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
+            {
                 credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
                     GoogleClientSecrets.FromStream(stream).Secrets,
-                    scopes, "user", CancellationToken.None, new FileDataStore("TokenStore", true));
+                    Scopes, "user", CancellationToken.None, new FileDataStore("TokenStore", true));
             }
 
             var service = new ClassroomService(new BaseClientService.Initializer()
             {
                 HttpClientInitializer = credential,
-                ApplicationName = "Campus Sync API",
+                ApplicationName = "Campus Sync API"
             });
 
-            var studentGrades = new Dictionary<string, float>();
+            var studentGrades = new Dictionary<string, List<StudentGradeItem>>();
             var userEmailMap = new Dictionary<string, string>();
 
-            // 1. Получаем список студентов
+            // 1. Отримуємо список студентів та їхні Email
             var studentsResponse = await service.Courses.Students.List(courseId).ExecuteAsync();
-
             if (studentsResponse.Students != null)
             {
                 foreach (var student in studentsResponse.Students)
                 {
-                    // ЗАЩИТА: проверяем, что UserId и Email не пустые
                     string userId = student.UserId;
                     string email = student.Profile?.EmailAddress;
 
                     if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(email))
                     {
                         userEmailMap[userId] = email;
-                        studentGrades[email] = 0; // Начинаем с 0 баллов
+                        studentGrades[email] = new List<StudentGradeItem>();
                     }
                 }
             }
 
-            // 2. Получаем все задания курса
+            // 2. Отримуємо всі завдання курсу
             var courseWorkResponse = await service.Courses.CourseWork.List(courseId).ExecuteAsync();
-
             if (courseWorkResponse.CourseWork != null)
             {
-                // 3. Вытягиваем оценки по каждому заданию
                 foreach (var work in courseWorkResponse.CourseWork)
                 {
-                    var submissionsResponse = await service.Courses.CourseWork.StudentSubmissions.List(courseId, work.Id).ExecuteAsync();
-
-                    if (submissionsResponse.StudentSubmissions != null)
+                    var subResponse = await service.Courses.CourseWork.StudentSubmissions.List(courseId, work.Id).ExecuteAsync();
+                    if (subResponse.StudentSubmissions != null)
                     {
-                        foreach (var sub in submissionsResponse.StudentSubmissions)
+                        foreach (var sub in subResponse.StudentSubmissions)
                         {
-                            // ЗАЩИТА: проверяем, что UserId есть и преподаватель ВЕРНУЛ оценку (AssignedGrade)
-                            if (!string.IsNullOrEmpty(sub.UserId) && sub.AssignedGrade.HasValue)
+                            // ФІЛЬТР: Беремо тільки ПОВЕРНЕНІ ("RETURNED") оцінки
+                            if (sub.State == "RETURNED" && sub.AssignedGrade.HasValue && !string.IsNullOrEmpty(sub.UserId))
                             {
-                                if (userEmailMap.TryGetValue(sub.UserId, out var email) && !string.IsNullOrEmpty(email))
+                                if (userEmailMap.TryGetValue(sub.UserId, out var email))
                                 {
-                                    studentGrades[email] += (float)sub.AssignedGrade.Value;
+                                    studentGrades[email].Add(new StudentGradeItem
+                                    {
+                                        AssignmentTitle = work.Title,
+                                        Mark = (float)sub.AssignedGrade.Value
+                                    });
                                 }
                             }
                         }
@@ -96,29 +116,5 @@ namespace CampusApi.Services
 
             return studentGrades;
         }
-        public async Task<List<string>> GetMyCoursesIdsAsync()
-        {
-            UserCredential credential;
-            using (var stream = new FileStream("credentials.json", FileMode.Open, FileAccess.Read))
-            {
-                credential = await GoogleWebAuthorizationBroker.AuthorizeAsync(
-                    GoogleClientSecrets.FromStream(stream).Secrets,
-                    Scopes, "user", CancellationToken.None, new FileDataStore("TokenStore", true));
-            }
-
-            var service = new ClassroomService(new BaseClientService.Initializer() { HttpClientInitializer = credential, ApplicationName = "Campus Sync API" });
-            var response = await service.Courses.List().ExecuteAsync();
-
-            var list = new List<string>();
-            if (response.Courses != null)
-            {
-                foreach (var course in response.Courses)
-                {
-                    list.Add($"Курс: {course.Name} | ТВОЙ ПРАВИЛЬНЫЙ ID: {course.Id}");
-                }
-            }
-            return list;
-        }
-
     }
 }

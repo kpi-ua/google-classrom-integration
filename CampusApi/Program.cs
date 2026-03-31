@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Подключаем MySQL БД
+// Підключення до БД MySQL (замініть пароль на свій)
 var connectionString = "Server=localhost;Database=campus_test;User=root;Password=;";
 
 builder.Services.AddDbContext<CampusDbContext>(options =>
@@ -14,7 +14,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Регистрируем наши сервисы
+// Реєстрація наших сервісів для Dependency Injection
 builder.Services.AddScoped<IGoogleClassroomService, GoogleClassroomService>();
 builder.Services.AddScoped<GradeSyncService>();
 

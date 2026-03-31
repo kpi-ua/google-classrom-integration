@@ -17,79 +17,80 @@ namespace CampusApi.Services
 
         public async Task<string> SyncGradesAsync(string courseId, int cMonitoringEmployeeId)
         {
-            // 1. Получаем суммы балов из гугла
-            var googleGrades = await _googleApi.GetTotalGradesForCourseAsync(courseId);
-
-            // 2. Ищем или создаем колонку в ведомости для "Итоговой суммы из Google Classroom"
-            var column = await _db.MonitoringColumns.FirstOrDefaultAsync(c =>
-                c.CMonitoringEmployeeId == cMonitoringEmployeeId &&
-                c.DcLoadId == 26); // 26 - по ТЗ "Завдання Google класу"
-
-            if (column == null)
-            {
-                column = new CMonitoringColumn
-                {
-                    CMonitoringEmployeeId = cMonitoringEmployeeId,
-                    DcLoadId = 26,
-                    DateMark = DateTime.Now,
-                    Description = "Итоговая оценка синхронизированная из Google Classroom"
-                };
-                _db.MonitoringColumns.Add(column);
-                await _db.SaveChangesAsync();
-            }
-
+            // Отримуємо список усіх студентів та їхні оцінки за КОЖНЕ завдання
+            var allGrades = await _googleApi.GetAllGradesForCourseAsync(courseId);
             int syncedCount = 0;
 
-            // 3. Идем по всем студентам из Гугла
-            foreach (var googleStudent in googleGrades)
+            foreach (var studentGrade in allGrades)
             {
-                string email = googleStudent.Key;
-                float totalMark = googleStudent.Value;
+                string email = studentGrade.Key;
+                var gradesList = studentGrade.Value;
 
-                // Ищем студента в Кампусе по Email (DcContactTypeId = 29)
-                var userContact = await _db.UserContacts
-                    .FirstOrDefaultAsync(uc => uc.DcContactTypeId == 29 && uc.UserContactValue == email);
-
-                if (userContact == null) continue; // Если email нет в Кампусе - пропускаем
+                // Шукаємо студента в Кампусі за Email
+                var userContact = await _db.UserContacts.FirstOrDefaultAsync(uc => uc.DcContactTypeId == 29 && uc.UserContactValue == email);
+                if (userContact == null) continue; // Якщо студента немає в Кампусі - пропускаємо
 
                 int personalityId = userContact.SPersonalityId;
 
-                // Проверяем, есть ли студент в этой ведомости
-                var monitoringStudent = await _db.MonitoringStudents
-                    .FirstOrDefaultAsync(ms => ms.SPersonalityId == personalityId && ms.CMonitoringEmployeeId == cMonitoringEmployeeId);
-
+                // Перевіряємо, чи є студент у цій конкретній відомості викладача
+                var monitoringStudent = await _db.MonitoringStudents.FirstOrDefaultAsync(ms => ms.SPersonalityId == personalityId && ms.CMonitoringEmployeeId == cMonitoringEmployeeId);
                 if (monitoringStudent == null) continue;
 
-                // 4. Ищем существующую оценку в ячейке или создаем новую
-                var row = await _db.MonitoringRows.FirstOrDefaultAsync(r =>
-                    r.CMonitoringColumnId == column.CMonitoringColumnId &&
-                    r.SPersonalityId == personalityId);
-
-                if (row == null)
+                // Перебираємо кожну оцінку студента
+                foreach (var grade in gradesList)
                 {
-                    row = new CMonitoringRow
+                    string colDescription = $"Google: {grade.AssignmentTitle}";
+
+                    // Шукаємо колонку під конкретне завдання (або створюємо її)
+                    var column = await _db.MonitoringColumns.FirstOrDefaultAsync(c =>
+                        c.CMonitoringEmployeeId == cMonitoringEmployeeId &&
+                        c.Description == colDescription);
+
+                    if (column == null)
                     {
-                        CMonitoringColumnId = column.CMonitoringColumnId,
-                        SPersonalityId = personalityId,
-                        CMonitoringStudentId = monitoringStudent.CMonitoringStudentId,
-                        Mark = totalMark,
-                        VcActuality = '1',
-                        VcChangeDate = DateTime.Now
-                    };
-                    _db.MonitoringRows.Add(row);
-                }
-                else
-                {
-                    row.Mark = totalMark; // Обновляем оценку
-                    row.VcChangeDate = DateTime.Now;
-                    _db.MonitoringRows.Update(row);
-                }
+                        column = new CMonitoringColumn
+                        {
+                            CMonitoringEmployeeId = cMonitoringEmployeeId,
+                            DcLoadId = 26, // 26 = Завдання Google класу
+                            DateMark = DateTime.Now,
+                            Description = colDescription
+                        };
+                        _db.MonitoringColumns.Add(column);
+                        await _db.SaveChangesAsync(); // Зберігаємо одразу, щоб отримати ID згенерованої колонки
+                    }
 
-                syncedCount++;
+                    // Записуємо оцінку студенту саме в ЦЮ колонку
+                    var row = await _db.MonitoringRows.FirstOrDefaultAsync(r =>
+                        r.CMonitoringColumnId == column.CMonitoringColumnId &&
+                        r.SPersonalityId == personalityId);
+
+                    if (row == null)
+                    {
+                        row = new CMonitoringRow
+                        {
+                            CMonitoringColumnId = column.CMonitoringColumnId,
+                            SPersonalityId = personalityId,
+                            CMonitoringStudentId = monitoringStudent.CMonitoringStudentId,
+                            Mark = grade.Mark,
+                            VcActuality = '1',
+                            VcChangeDate = DateTime.Now
+                        };
+                        _db.MonitoringRows.Add(row);
+                    }
+                    else
+                    {
+                        // Оновлюємо існуючу оцінку
+                        row.Mark = grade.Mark;
+                        row.VcChangeDate = DateTime.Now;
+                        _db.MonitoringRows.Update(row);
+                    }
+
+                    syncedCount++;
+                }
             }
 
             await _db.SaveChangesAsync();
-            return $"Синхронизация успешна! Перенесено оценок: {syncedCount}.";
+            return $"Синхронізація успішна! Перенесено індивідуальних оцінок: {syncedCount}.";
         }
     }
 }
