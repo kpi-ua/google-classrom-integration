@@ -12,6 +12,7 @@ namespace CampusApi.Models
         public int SPersonalityId { get; set; }
         public int CMonitoringStudentId { get; set; }
         public float? Mark { get; set; } // Виставлений бал
+        public string? GoogleStudentSubmissionId { get; set; }
         public char VcActuality { get; set; } = '1';
         public DateTime VcChangeDate { get; set; } = DateTime.Now;
     }

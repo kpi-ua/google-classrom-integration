@@ -12,5 +12,6 @@ namespace CampusApi.Models
         public int DcLoadId { get; set; } // 26 - Завдання Google класу за ТЗ
         public DateTime DateMark { get; set; }
         public string Description { get; set; } // Назва завдання
+        public string? GoogleCourseWorkId { get; set; }
     }
 }

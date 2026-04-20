@@ -10,5 +10,6 @@ namespace CampusApi.Models
         [Key] public int CMonitoringStudentId { get; set; }
         public int CMonitoringEmployeeId { get; set; } // ID відомості (наприклад, 999)
         public int SPersonalityId { get; set; }
+        public string? GoogleStudentId { get; set; }
     }
 }
